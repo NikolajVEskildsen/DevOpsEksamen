@@ -10,6 +10,7 @@ public class TodoService
         new TodoItem { Id = 2, Title = "Walk the dog", IsCompleted = true },
         new TodoItem { Id = 3, Title = "Read a book", IsCompleted = false },
         new TodoItem { Id = 4, Title = "Clean the house", IsCompleted = false },
+        new TodoItem { Id = 5, Title = "Pay bills", IsCompleted = true },
     ];
 
     private int _nextId = 4;

@@ -1,8 +1,9 @@
 name: AI Code Review
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
 
 permissions:
   contents: read
@@ -13,12 +14,27 @@ jobs:
   ai-review:
     name: Claude AI Review
     runs-on: ubuntu-latest
+    if: >
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    outputs:
+      decision: ${{ steps.ai_review.outputs.decision }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
+
+      - name: Get PR number and title
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_JSON=$(gh pr list --state open --json number,title,headRefOid \
+            --jq '.[] | select(.headRefOid == "${{ github.event.workflow_run.head_sha }}")')
+          echo "number=$(echo "$PR_JSON" | jq -r '.number')" >> $GITHUB_OUTPUT
+          echo "title=$(echo "$PR_JSON" | jq -r '.title')" >> $GITHUB_OUTPUT
 
       - name: Set pending status
         uses: actions/github-script@v7
@@ -27,7 +43,7 @@ jobs:
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              sha: context.payload.pull_request.head.sha,
+              sha: '${{ github.event.workflow_run.head_sha }}',
               state: 'pending',
               context: 'AI Code Review',
               description: 'Claude is reviewing your changes...',
@@ -48,7 +64,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh pr diff ${{ github.event.pull_request.number }} \
+          gh pr diff ${{ steps.pr.outputs.number }} \
             --repo ${{ github.repository }} \
             | head -c 30000 > /tmp/pr_diff.txt
 
@@ -84,7 +100,7 @@ jobs:
           echo "" > /tmp/changed_files.txt
 
           # Get list of changed files (excluding deleted ones)
-          CHANGED_FILES=$(gh pr view ${{ github.event.pull_request.number }} \
+          CHANGED_FILES=$(gh pr view ${{ steps.pr.outputs.number }} \
             --repo ${{ github.repository }} \
             --json files \
             --jq '.files[].path')
@@ -132,9 +148,9 @@ jobs:
             --arg pr_diff "$PR_DIFF" \
             --arg file_tree "$FILE_TREE" \
             --arg changed_files "$CHANGED_FILES" \
-            --arg pr_title "${{ github.event.pull_request.title }}" \
+            --arg pr_title "${{ steps.pr.outputs.title }}" \
             '{
-              model: "claude-haiku-4-5-20251001",
+              model: "claude-opus-4-6",
               max_tokens: 1024,
               messages: [
                 {
@@ -191,12 +207,14 @@ jobs:
         env:
           DECISION: ${{ steps.ai_review.outputs.decision }}
           SUMMARY: ${{ steps.ai_review.outputs.summary }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
         with:
           script: |
             const fs = require('fs');
             const decision = process.env.DECISION;
             const summary = process.env.SUMMARY;
             const details = fs.readFileSync('/tmp/review_details.txt', 'utf8').trim();
+            const prNumber = parseInt(process.env.PR_NUMBER);
 
             const approved = decision === 'APPROVED';
             const label = approved ? 'APPROVED' : 'CHANGES REQUESTED';
@@ -213,11 +231,10 @@ jobs:
               `<sub>Reviewed by Claude AI against <code>CLAUDE.md</code> · Context: diff + file tree + changed files</sub>`,
             ].join('\n');
 
-            // Update existing bot comment or create a new one
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
+              issue_number: prNumber,
             });
 
             const botComment = comments.find(c =>
@@ -235,7 +252,7 @@ jobs:
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: context.payload.pull_request.number,
+                issue_number: prNumber,
                 body,
               });
             }
@@ -255,8 +272,22 @@ jobs:
             await github.rest.repos.createCommitStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              sha: context.payload.pull_request.head.sha,
+              sha: '${{ github.event.workflow_run.head_sha }}',
               state: approved ? 'success' : 'failure',
               context: 'AI Code Review',
               description: summary.substring(0, 140),
             });
+
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: [ai-review]
+    if: needs.ai-review.outputs.decision == 'APPROVED'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Build image
+        run: docker build -t devops-eksamen .

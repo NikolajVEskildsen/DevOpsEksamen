@@ -44,7 +44,7 @@ npm run lint
 
 ## Architecture Notes
 
-- `TodoService` is registered as a singleton and holds an in-memory list with 3 stub items seeded at startup.
+- `TodoService` is registered as a singleton and holds an in-memory list with stub items
 - Tests directly instantiate `TodoService` — no mocking needed since there are no external dependencies.
 - The Vue frontend is served as static files from the ASP.NET Core app (`wwwroot/`), so both run in a single Docker container on port 8080.
 

@@ -1,0 +1,262 @@
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  ai-review:
+    name: Claude AI Review
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set pending status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.payload.pull_request.head.sha,
+              state: 'pending',
+              context: 'AI Code Review',
+              description: 'Claude is reviewing your changes...',
+            });
+
+      - name: Read CLAUDE.md
+        id: claude_md
+        run: |
+          if [ ! -f "CLAUDE.md" ]; then
+            echo "CLAUDE.md not found in repository root."
+            exit 1
+          fi
+          cp CLAUDE.md /tmp/claude_md.txt
+          echo "found=true" >> $GITHUB_OUTPUT
+
+      - name: Get PR diff
+        id: diff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr diff ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            | head -c 30000 > /tmp/pr_diff.txt
+
+          if [ ! -s /tmp/pr_diff.txt ]; then
+            echo "empty=true" >> $GITHUB_OUTPUT
+          else
+            echo "empty=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get file tree and changed file contents
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # --- 1. Repo file tree (excluding common noise) ---
+          echo "## Repository File Tree" > /tmp/file_tree.txt
+          echo '```' >> /tmp/file_tree.txt
+          find . \
+            -not -path './.git/*' \
+            -not -path './node_modules/*' \
+            -not -path './.next/*' \
+            -not -path './dist/*' \
+            -not -path './build/*' \
+            -not -path './__pycache__/*' \
+            -not -path './.venv/*' \
+            -not -path './vendor/*' \
+            -not -path './coverage/*' \
+            | sort \
+            | head -200 \
+            >> /tmp/file_tree.txt
+          echo '```' >> /tmp/file_tree.txt
+
+          # --- 2. Full contents of changed files ---
+          echo "" > /tmp/changed_files.txt
+
+          # Get list of changed files (excluding deleted ones)
+          CHANGED_FILES=$(gh pr view ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --json files \
+            --jq '.files[].path')
+
+          TOTAL_SIZE=0
+          MAX_SIZE=60000  # ~60k chars budget for file contents
+
+          echo "$CHANGED_FILES" | while IFS= read -r filepath; do
+            # Skip if file doesn't exist (deleted in PR), is binary, or is a lockfile
+            if [ ! -f "$filepath" ]; then continue; fi
+            if echo "$filepath" | grep -qE '\.(png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|pdf|zip|lock)$'; then continue; fi
+            if echo "$filepath" | grep -qE '(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|composer\.lock|Gemfile\.lock|poetry\.lock)$'; then continue; fi
+
+            FILE_SIZE=$(wc -c < "$filepath" 2>/dev/null || echo 0)
+            TOTAL_SIZE=$((TOTAL_SIZE + FILE_SIZE))
+
+            if [ "$TOTAL_SIZE" -gt "$MAX_SIZE" ]; then
+              echo "## $filepath" >> /tmp/changed_files.txt
+              echo "_[File skipped - total context budget reached]_" >> /tmp/changed_files.txt
+              echo "" >> /tmp/changed_files.txt
+              continue
+            fi
+
+            echo "## $filepath" >> /tmp/changed_files.txt
+            echo '```' >> /tmp/changed_files.txt
+            cat "$filepath" >> /tmp/changed_files.txt
+            echo "" >> /tmp/changed_files.txt
+            echo '```' >> /tmp/changed_files.txt
+            echo "" >> /tmp/changed_files.txt
+          done
+
+      - name: Run Claude AI Review
+        id: ai_review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          CLAUDE_MD=$(cat /tmp/claude_md.txt)
+          PR_DIFF=$(cat /tmp/pr_diff.txt)
+          FILE_TREE=$(cat /tmp/file_tree.txt)
+          CHANGED_FILES=$(cat /tmp/changed_files.txt)
+
+          # Build the JSON payload using jq to safely escape all content
+          PAYLOAD=$(jq -n \
+            --arg claude_md "$CLAUDE_MD" \
+            --arg pr_diff "$PR_DIFF" \
+            --arg file_tree "$FILE_TREE" \
+            --arg changed_files "$CHANGED_FILES" \
+            --arg pr_title "${{ github.event.pull_request.title }}" \
+            '{
+              model: "claude-haiku-4-5-20251001",
+              max_tokens: 1024,
+              messages: [
+                {
+                  role: "user",
+                  content: (
+                    "You are a strict code reviewer. Your job is to check whether the code changes in a pull request align with the project guidelines defined in CLAUDE.md.\n\n"
+                    + "## CLAUDE.md (project guidelines):\n" + $claude_md + "\n\n"
+                    + "## PR Title:\n" + $pr_title + "\n\n"
+                    + "## Repository File Tree:\n" + $file_tree + "\n\n"
+                    + "## Full contents of changed files:\n" + $changed_files + "\n\n"
+                    + "## PR Diff (what changed):\n" + $pr_diff + "\n\n"
+                    + "## Instructions:\n"
+                    + "Review the changes holistically. Use the full file contents and repo structure to understand the broader context, and use the diff to see exactly what was changed. Check everything against the CLAUDE.md guidelines.\n\n"
+                    + "Respond with ONLY a JSON object in this exact format (no markdown, no extra text):\n"
+                    + "{\n"
+                    + "  \"decision\": \"APPROVED\" or \"CHANGES_REQUESTED\",\n"
+                    + "  \"summary\": \"One concise sentence explaining your decision (max 120 chars)\",\n"
+                    + "  \"details\": \"2-4 sentences with specific findings. If rejecting, cite which guideline was violated and where in the diff.\"\n"
+                    + "}"
+                  )
+                }
+              ]
+            }')
+
+          # Call the Anthropic API
+          RESPONSE=$(curl -s -X POST "https://api.anthropic.com/v1/messages" \
+            -H "Content-Type: application/json" \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -d "$PAYLOAD")
+
+          echo "API Response: $RESPONSE"
+
+          # Extract the text content from the response
+          AI_TEXT=$(echo "$RESPONSE" | jq -r '.content[0].text // empty')
+
+          if [ -z "$AI_TEXT" ]; then
+            echo "Failed to get a valid response from Claude API."
+            echo "Full response: $RESPONSE"
+            exit 1
+          fi
+
+          # Parse decision and details
+          DECISION=$(echo "$AI_TEXT" | jq -r '.decision // "CHANGES_REQUESTED"')
+          SUMMARY=$(echo "$AI_TEXT" | jq -r '.summary // "Unable to parse review summary."')
+          DETAILS=$(echo "$AI_TEXT" | jq -r '.details // "Unable to parse review details."')
+
+          echo "decision=$DECISION" >> $GITHUB_OUTPUT
+          echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
+          echo "$DETAILS" > /tmp/review_details.txt
+
+      - name: Post PR comment
+        uses: actions/github-script@v7
+        env:
+          DECISION: ${{ steps.ai_review.outputs.decision }}
+          SUMMARY: ${{ steps.ai_review.outputs.summary }}
+        with:
+          script: |
+            const fs = require('fs');
+            const decision = process.env.DECISION;
+            const summary = process.env.SUMMARY;
+            const details = fs.readFileSync('/tmp/review_details.txt', 'utf8').trim();
+
+            const approved = decision === 'APPROVED';
+            const label = approved ? 'APPROVED' : 'CHANGES REQUESTED';
+
+            const body = [
+              `## AI Code Review - ${label}`,
+              ``,
+              `> ${summary}`,
+              ``,
+              `### Details`,
+              details,
+              ``,
+              `---`,
+              `<sub>Reviewed by Claude AI against <code>CLAUDE.md</code> · Context: diff + file tree + changed files</sub>`,
+            ].join('\n');
+
+            // Update existing bot comment or create a new one
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+            });
+
+            const botComment = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes('AI Code Review')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body,
+              });
+            }
+
+      - name: Set final commit status
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          DECISION: ${{ steps.ai_review.outputs.decision }}
+          SUMMARY: ${{ steps.ai_review.outputs.summary }}
+        with:
+          script: |
+            const decision = process.env.DECISION;
+            const summary = process.env.SUMMARY || 'Review complete.';
+            const approved = decision === 'APPROVED';
+
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.payload.pull_request.head.sha,
+              state: approved ? 'success' : 'failure',
+              context: 'AI Code Review',
+              description: summary.substring(0, 140),
+            });

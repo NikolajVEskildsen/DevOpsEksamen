@@ -4,6 +4,7 @@ namespace TodoApi.Services;
 
 public class TodoService
 {
+    // In-memory list to store todo items for simplicity
     private readonly List<TodoItem> _todos =
     [
         new TodoItem { Id = 1, Title = "Buy groceries", IsCompleted = false },

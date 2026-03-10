@@ -12,7 +12,7 @@ public class TodoServiceTests
     {
         var service = CreateService();
         var items = service.GetAll();
-        Assert.Equal(3, items.Count);
+        Assert.Equal(5, items.Count);
     }
 
     [Fact]
@@ -39,7 +39,7 @@ public class TodoServiceTests
         var newItem = service.Add("Write tests");
         Assert.Equal("Write tests", newItem.Title);
         Assert.False(newItem.IsCompleted);
-        Assert.Equal(4, service.GetAll().Count);
+        Assert.Equal(6, service.GetAll().Count);
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public class TodoServiceTests
     {
         var service = CreateService();
         service.Delete(1);
-        Assert.Equal(2, service.GetAll().Count);
+        Assert.Equal(4, service.GetAll().Count);
         Assert.Null(service.GetById(1));
     }
 

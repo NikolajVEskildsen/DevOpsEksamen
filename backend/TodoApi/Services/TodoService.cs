@@ -13,7 +13,7 @@ public class TodoService
         new TodoItem { Id = 5, Title = "Pay bills", IsCompleted = true },
     ];
 
-    private int _nextId = 6;
+    private int _nextId = 4;
 
     public List<TodoItem> GetAll() => _todos;
 

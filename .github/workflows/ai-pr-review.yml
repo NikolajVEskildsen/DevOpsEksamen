@@ -3,6 +3,8 @@ name: AI Code Review
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+    branches:
+      - staging
 
 permissions:
   contents: read
@@ -37,7 +39,7 @@ jobs:
         id: claude_md
         run: |
           if [ ! -f "CLAUDE.md" ]; then
-            echo "CLAUDE.md not found in repository root."
+            echo "❌ CLAUDE.md not found in repository root."
             exit 1
           fi
           cp CLAUDE.md /tmp/claude_md.txt
@@ -103,7 +105,7 @@ jobs:
 
             if [ "$TOTAL_SIZE" -gt "$MAX_SIZE" ]; then
               echo "## $filepath" >> /tmp/changed_files.txt
-              echo "_[File skipped - total context budget reached]_" >> /tmp/changed_files.txt
+              echo "_[File skipped — total context budget reached]_" >> /tmp/changed_files.txt
               echo "" >> /tmp/changed_files.txt
               continue
             fi
@@ -148,7 +150,7 @@ jobs:
                     + "## PR Diff (what changed):\n" + $pr_diff + "\n\n"
                     + "## Instructions:\n"
                     + "Review the changes holistically. Use the full file contents and repo structure to understand the broader context, and use the diff to see exactly what was changed. Check everything against the CLAUDE.md guidelines.\n\n"
-                    + "Respond with ONLY a JSON object in this exact format (no markdown, no extra text):\n"
+                    + "Respond with ONLY a raw JSON object. Do NOT wrap it in markdown code fences or backticks. No preamble, no extra text:\n"
                     + "{\n"
                     + "  \"decision\": \"APPROVED\" or \"CHANGES_REQUESTED\",\n"
                     + "  \"summary\": \"One concise sentence explaining your decision (max 120 chars)\",\n"
@@ -170,6 +172,9 @@ jobs:
 
           # Extract the text content from the response
           AI_TEXT=$(echo "$RESPONSE" | jq -r '.content[0].text // empty')
+
+          # Strip markdown code fences if Claude wrapped the JSON in them
+          AI_TEXT=$(echo "$AI_TEXT" | sed 's/^```json//;s/^```//' | sed '/^```/d' | sed 's/```$//')
 
           if [ -z "$AI_TEXT" ]; then
             echo "Failed to get a valid response from Claude API."
@@ -202,7 +207,7 @@ jobs:
             const label = approved ? 'APPROVED' : 'CHANGES REQUESTED';
 
             const body = [
-              `## AI Code Review - ${label}`,
+              `## AI Code Review — ${label}`,
               ``,
               `> ${summary}`,
               ``,

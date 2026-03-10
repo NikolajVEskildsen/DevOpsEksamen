@@ -46,4 +46,12 @@ npm run lint
 
 - `TodoService` is registered as a singleton and holds an in-memory list with 3 stub items seeded at startup.
 - Tests directly instantiate `TodoService` — no mocking needed since there are no external dependencies.
-- Swagger UI is available at `/swagger` in development.
+- The Vue frontend is served as static files from the ASP.NET Core app (`wwwroot/`), so both run in a single Docker container on port 8080.
+
+## PR Review (Claude API)
+
+The Claude API is used to automatically review pull requests. When reviewing:
+
+- **Review**: C# (`.cs`) and Vue (`.vue`) files for functionality — correctness, logic, bugs, and behaviour.
+- **Skip**: `.yml`/`.yaml` files, and common data/config files (`.json`, `.xml`, `.csproj`, `.sln`).
+- **Do not** flag linting or formatting issues — these are already enforced by the CI pipeline.

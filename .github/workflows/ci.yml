@@ -51,7 +51,7 @@ jobs:
         run: dotnet format backend/TodoApp.sln --verify-no-changes
 
       - name: Build
-        run: dotnet build backend/TodoApp.sln --no-restore -c Release
+        run: dotnet build backend/TodoApp.sln --no-restore -c Release /warnaserror
 
       - name: Test
         run: dotnet test backend/TodoApp.sln --no-build -c Release

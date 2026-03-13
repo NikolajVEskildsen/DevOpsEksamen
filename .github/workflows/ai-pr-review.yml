@@ -281,17 +281,3 @@ jobs:
               context: 'AI Code Review',
               description: summary.substring(0, 140),
             });
-
-  docker:
-    name: Docker Build
-    runs-on: ubuntu-latest
-    needs: [ai-review]
-    if: needs.ai-review.outputs.decision == 'APPROVED'
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-
-      - name: Build image
-        run: docker build -t devops-eksamen .

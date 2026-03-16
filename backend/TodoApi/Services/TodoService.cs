@@ -12,9 +12,10 @@ public class TodoService
         new TodoItem { Id = 3, Title = "Read a book", IsCompleted = false },
         new TodoItem { Id = 4, Title = "Clean the house", IsCompleted = false },
         new TodoItem { Id = 5, Title = "Pay bills", IsCompleted = true },
+        new TodoItem { Id = 6, Title = "Water the plants", IsCompleted = false },
     ];
 
-    private int _nextId = 6;
+    private int _nextId = 7;
 
     public List<TodoItem> GetAll() => _todos;
 

@@ -28,7 +28,6 @@ interface TodoItem {
 }
 
 const API = '/api/todo'
-const debug = 'enabled'
 
 const todos = ref<TodoItem[]>([])
 const newTitle = ref('')

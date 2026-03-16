@@ -22,7 +22,7 @@ public class TodoService
 
     public TodoItem Add(string title)
     {
-        var item = new TodoItem { Id = _nextId, Title = title };
+        var item = new TodoItem { Id = _nextId++, Title = title };
         _todos.Add(item);
         return item;
     }
